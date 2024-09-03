@@ -12,6 +12,9 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.Mockito;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.retry.RetryCallback;
+import org.springframework.retry.RetryContext;
+import org.springframework.retry.support.RetryTemplate;
 
 import java.util.List;
 
@@ -30,6 +33,9 @@ class SshClientFactoryTest {
     @Mock
     private JSch mockJSch;
 
+    @Mock
+    private RetryTemplate mockTemplate;
+
     private SshClientFactory factory;
 
     @BeforeEach
@@ -43,16 +49,22 @@ class SshClientFactoryTest {
                         "password",
                         "",
                         null)),
+                mockTemplate,
                 mockJSch);
     }
 
     @Test
     public void testMakeObjectOnSuccess() throws Exception {
+
+        when(mockTemplate.execute(any())).thenAnswer(invocation -> {
+            RetryCallback<Session, Exception> retryCallback = invocation.getArgument(0);
+            return retryCallback.doWithRetry(null);
+        });
+
         // Arrange
         // Inject mock JSch instance
         Mockito.doReturn(mockSession).when(mockJSch).getSession(anyString(), anyString(), anyInt());
         when(mockSession.isConnected()).thenReturn(true);
-        when(factory.makeObject()).thenReturn(new DefaultPooledObject<>(mockSession));
 
         // Act
         PooledObject<Session> pooledObject = factory.makeObject();
@@ -114,6 +126,39 @@ class SshClientFactoryTest {
 
         // Assert
         assertFalse(isValid);
+    }
+
+
+    @Test
+    public void testRoundRobinSelection() {
+
+        List<SshClientConfigProperties> sshClientProps = List.of(
+                new SshClientConfigProperties("Server1", "host1", 22, "user1", "password1", "", null),
+                new SshClientConfigProperties("Server2", "host2", 22, "user2", "password2", "", null),
+                new SshClientConfigProperties("Server3", "host3", 22, "user3", "password3", "", null)
+        );
+
+        factory = new SshClientFactory(sshClientProps);
+
+        // Check that the first call to getSshClient() returns the first configuration
+        SshClientConfigProperties client1 = factory.getSshClient();
+        assertEquals(sshClientProps.get(0), client1, "Expected first client configuration");
+
+        // Check that the second call returns the second configuration
+        SshClientConfigProperties client2 = factory.getSshClient();
+        assertEquals(sshClientProps.get(1), client2, "Expected second client configuration");
+
+        // Check that the third call returns the third configuration
+        SshClientConfigProperties client3 = factory.getSshClient();
+        assertEquals(sshClientProps.get(2), client3, "Expected third client configuration");
+
+        // Check that the fourth call wraps around and returns the first configuration again
+        SshClientConfigProperties client4 = factory.getSshClient();
+        assertEquals(sshClientProps.get(0), client4, "Expected round-robin to wrap back to first client configuration");
+
+        // Check that the fifth call returns the second configuration again
+        SshClientConfigProperties client5 = factory.getSshClient();
+        assertEquals(sshClientProps.get(1), client5, "Expected round-robin to return second client configuration again");
     }
 
 

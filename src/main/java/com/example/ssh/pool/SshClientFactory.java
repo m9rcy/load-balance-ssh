@@ -19,23 +19,25 @@ public class SshClientFactory implements PooledObjectFactory<Session> {
 
     private static final Logger LOG = LoggerFactory.getLogger(SshClientFactory.class.getName());
     private final List<SshClientConfigProperties> sshClientProps;
-    private final RetryTemplate template = RetryTemplate.builder()
-            .maxAttempts(3)
-            .fixedBackoff(200)
-            .withListener(new SpringRetryLoggingListener())
-            .retryOn(Exception.class)
-            .build();
     private final AtomicInteger serverIndex = new AtomicInteger(0);
+    private final RetryTemplate retryTemplate;
     private JSch jsch;
 
     // For mocking
-    public SshClientFactory(List<SshClientConfigProperties> sshClientProps, JSch jsch) {
+    public SshClientFactory(List<SshClientConfigProperties> sshClientProps, RetryTemplate retryTemplate, JSch jsch) {
         this.sshClientProps = sshClientProps;
+        this.retryTemplate = retryTemplate;
         this.jsch = jsch;
     }
 
     public SshClientFactory(List<SshClientConfigProperties> sshClientProps) {
         this.sshClientProps = sshClientProps;
+        this.retryTemplate =  RetryTemplate.builder()
+                .maxAttempts(3)
+                .fixedBackoff(200)
+                .withListener(new SpringRetryLoggingListener())
+                .retryOn(Exception.class)
+                .build();
     }
 
     @Override
@@ -53,7 +55,7 @@ public class SshClientFactory implements PooledObjectFactory<Session> {
 
     @Override
     public PooledObject<Session> makeObject() throws Exception {
-        Session session = template.execute(ctx -> newSession());
+        Session session = retryTemplate.execute(ctx -> newSession());
         return new DefaultPooledObject<>(session);
     }
 
@@ -73,7 +75,8 @@ public class SshClientFactory implements PooledObjectFactory<Session> {
         return session;
     }
 
-    private SshClientConfigProperties getSshClient() {
+
+    SshClientConfigProperties getSshClient() {
         // Round-robin selection of the next host configuration
         int index = serverIndex.getAndUpdate(i -> (i + 1) % sshClientProps.size());
         return sshClientProps.get(index);
